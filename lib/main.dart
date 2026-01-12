@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:http/http.dart' as http;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,7 +42,8 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _toggleTheme() async {
     final prefs = await SharedPreferences.getInstance();
-    final newMode = _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    final newMode =
+        _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
     await prefs.setBool('is_dark_mode', newMode == ThemeMode.dark);
     setState(() {
       _themeMode = newMode;
@@ -51,7 +53,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Page Turner Companion',
+      title: 'Page Turner App',
       themeMode: _themeMode,
       theme: ThemeData(
         useMaterial3: true,
@@ -118,7 +120,7 @@ class _MyAppState extends State<MyApp> {
 
 class ConnectionPage extends StatefulWidget {
   final VoidCallback onToggleTheme;
-  
+
   const ConnectionPage({super.key, required this.onToggleTheme});
 
   @override
@@ -130,14 +132,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
   final TextEditingController _portController = TextEditingController();
   String _status = 'Enter KOReader device IP address';
   String _lastIpHint = '192.168.1.100';
-  bool _isConnecting = false;
-  RawDatagramSocket? _currentSocket;
-  Timer? _currentTimeout;
 
   @override
   void initState() {
     super.initState();
-    _portController.text = '8134';
+    _portController.text = '8080';
     _loadLastIp();
   }
 
@@ -159,7 +158,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     await prefs.setString('last_ip', ip);
   }
 
-  Future<void> _connect() async {
+  void _connect() async {
     final ip = _ipController.text.trim();
     final portStr = _portController.text.trim();
 
@@ -180,110 +179,24 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
     await _saveLastIp(ip);
 
-    setState(() {
-      _isConnecting = true;
-      _status =
-          'Searching for device... (Make sure you pressed "Start Service" in KOReader)';
-    });
-
-    try {
-      _currentSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-
-      final data = 'REQUEST'.codeUnits;
-      _currentSocket!.send(data, InternetAddress(ip), port);
-
-      bool receivedResponse = false;
-
-      _currentTimeout = Timer(const Duration(seconds: 10), () {
-        if (!receivedResponse) {
-          _currentSocket?.close();
-          _currentTimeout?.cancel();
-          if (mounted) {
-            setState(() {
-              _status = 'Connection timeout - no response from KOReader device';
-              _isConnecting = false;
-            });
-          }
-        }
-      });
-
-      _currentSocket!.listen((event) {
-        if (event == RawSocketEvent.read) {
-          final packet = _currentSocket!.receive();
-          if (packet != null) {
-            final response = String.fromCharCodes(packet.data).trim();
-
-            if (!receivedResponse &&
-                response != 'ACCEPTED' &&
-                response != 'DENIED') {
-              receivedResponse = true;
-              if (mounted) {
-                setState(() {
-                  _status =
-                      'Device found! Awaiting user confirmation on device...';
-                });
-              }
-              return;
-            }
-
-            receivedResponse = true;
-            _currentTimeout?.cancel();
-            _currentSocket?.close();
-
-            if (response == 'ACCEPTED') {
-              if (mounted) {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => ControlPage(
-                      ip: ip, 
-                      port: port,
-                      onToggleTheme: widget.onToggleTheme,
-                    ),
-                  ),
-                );
-              }
-            } else if (response == 'DENIED') {
-              if (mounted) {
-                setState(() {
-                  _status = 'Connection denied by user';
-                  _isConnecting = false;
-                });
-              }
-            } else if (response == 'REQUESTING') {
-              if (mounted) {
-                setState(() {
-                  _status =
-                      'Device found! Awaiting user confirmation on device...';
-                });
-              }
-            }
-          }
-        }
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _status = 'Error: $e';
-          _isConnecting = false;
-        });
-      }
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ControlPage(
+            ip: ip,
+            port: port,
+            onToggleTheme: widget.onToggleTheme,
+          ),
+        ),
+      );
     }
-  }
-
-  void _cancelConnection() {
-    _currentTimeout?.cancel();
-    _currentSocket?.close();
-    setState(() {
-      _isConnecting = false;
-      _status = 'Connection cancelled';
-    });
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Scaffold(
       body: SafeArea(
         child: Stack(
@@ -327,7 +240,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       prefixIcon: const Icon(Icons.device_hub),
                     ),
                     keyboardType: TextInputType.number,
-                    enabled: !_isConnecting,
+                    enabled: true,
                   ),
                   const SizedBox(height: 20),
                   TextField(
@@ -335,64 +248,37 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     decoration: const InputDecoration(
                       labelText: 'Port',
                       border: OutlineInputBorder(),
-                      hintText: '8134',
+                      hintText: '8080',
                       prefixIcon: Icon(Icons.settings_ethernet),
                     ),
                     keyboardType: TextInputType.number,
-                    enabled: !_isConnecting,
+                    enabled: true,
                   ),
                   Text(
-                    'Default port is 8134 unless changed in Page Turner plugin code.',
+                    'Default port is 8080 unless changed in the HTTP Inspector settings on KOReader.',
                     style: TextStyle(
-                      fontSize: 12, 
+                      fontSize: 12,
                       color: isDark ? Colors.grey[400] : Colors.grey,
                     ),
                   ),
                   const SizedBox(height: 40),
                   OutlinedButton(
-                    onPressed: _isConnecting ? null : _connect,
+                    onPressed: _connect,
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.all(20),
                       foregroundColor: Theme.of(context).colorScheme.onSurface,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(3),
                       ),
-                      disabledBackgroundColor: Theme.of(context).colorScheme.surface,
+                      disabledBackgroundColor:
+                          Theme.of(context).colorScheme.surface,
                     ),
-                    child: _isConnecting
-                        ? SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              backgroundColor: Theme.of(context).colorScheme.surface,
-                              color: Colors.grey,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Text(
-                            'CONNECT',
-                            style:
-                                TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                          ),
+                    child: const Text(
+                      'CONNECT',
+                      style:
+                          TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                  if (_isConnecting) ...[
-                    const SizedBox(height: 20),
-                    OutlinedButton(
-                      onPressed: _cancelConnection,
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.all(15),
-                        foregroundColor: Colors.red,
-                        side: const BorderSide(color: Colors.red),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                      child: const Text(
-                        'CANCEL',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
                   const SizedBox(height: 40),
                   Container(
                     padding: const EdgeInsets.all(15),
@@ -407,8 +293,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       _status,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 14, 
-                        color: isDark ? Colors.grey[400] : const Color.fromARGB(255, 108, 108, 108),
+                        fontSize: 14,
+                        color: isDark
+                            ? Colors.grey[400]
+                            : const Color.fromARGB(255, 108, 108, 108),
                       ),
                     ),
                   ),
@@ -424,7 +312,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
                 onPressed: widget.onToggleTheme,
-                tooltip: isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+                tooltip:
+                    isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
               ),
             ),
           ],
@@ -435,8 +324,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   @override
   void dispose() {
-    _currentTimeout?.cancel();
-    _currentSocket?.close();
     _ipController.dispose();
     _portController.dispose();
     super.dispose();
@@ -462,12 +349,12 @@ extension VolumeButtonActionExtension on VolumeButtonAction {
     }
   }
 
-  String get command {
+  int get command {
     switch (this) {
       case VolumeButtonAction.next:
-        return 'NEXT';
+        return 1;
       case VolumeButtonAction.prev:
-        return 'PREV';
+        return -1;
     }
   }
 }
@@ -478,8 +365,8 @@ class ControlPage extends StatefulWidget {
   final VoidCallback onToggleTheme;
 
   const ControlPage({
-    super.key, 
-    required this.ip, 
+    super.key,
+    required this.ip,
     required this.port,
     required this.onToggleTheme,
   });
@@ -502,18 +389,20 @@ class _ControlPageState extends State<ControlPage> {
 
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'volumeUp') {
-        _sendCommand(_volumeUpAction.command);
+        _turnPage(_volumeUpAction.command);
       } else if (call.method == 'volumeDown') {
-        _sendCommand(_volumeDownAction.command);
+        _turnPage(_volumeDownAction.command);
       }
     });
   }
 
   Future<void> _loadVolumeButtonSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final upIndex = prefs.getInt('volume_up_action') ?? VolumeButtonAction.next.index;
-    final downIndex = prefs.getInt('volume_down_action') ?? VolumeButtonAction.prev.index;
-    
+    final upIndex =
+        prefs.getInt('volume_up_action') ?? VolumeButtonAction.next.index;
+    final downIndex =
+        prefs.getInt('volume_down_action') ?? VolumeButtonAction.prev.index;
+
     setState(() {
       _volumeUpAction = VolumeButtonAction.values[upIndex];
       _volumeDownAction = VolumeButtonAction.values[downIndex];
@@ -536,12 +425,13 @@ class _ControlPageState extends State<ControlPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final isDark = Theme.of(context).brightness == Brightness.dark;
-            
+
             return AlertDialog(
               backgroundColor: Theme.of(context).colorScheme.surface,
               title: Text(
                 'Volume Button Settings',
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                style:
+                    TextStyle(color: Theme.of(context).colorScheme.onSurface),
               ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -559,7 +449,8 @@ class _ControlPageState extends State<ControlPage> {
                     return RadioListTile<VolumeButtonAction>(
                       title: Text(
                         action.displayName,
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurface),
                       ),
                       value: action,
                       groupValue: tempVolumeUp,
@@ -586,7 +477,8 @@ class _ControlPageState extends State<ControlPage> {
                     return RadioListTile<VolumeButtonAction>(
                       title: Text(
                         action.displayName,
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurface),
                       ),
                       value: action,
                       groupValue: tempVolumeDown,
@@ -609,7 +501,8 @@ class _ControlPageState extends State<ControlPage> {
                   },
                   child: Text(
                     'CANCEL',
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ),
                 TextButton(
@@ -620,18 +513,20 @@ class _ControlPageState extends State<ControlPage> {
                     });
                     _saveVolumeButtonSettings();
                     Navigator.of(context).pop();
-                    
+
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: const Text('Settings saved'),
-                        backgroundColor: isDark ? Colors.grey[800] : Colors.grey[700],
+                        backgroundColor:
+                            isDark ? Colors.grey[800] : Colors.grey[700],
                         duration: const Duration(seconds: 2),
                       ),
                     );
                   },
                   child: Text(
                     'SAVE',
-                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurface),
                   ),
                 ),
               ],
@@ -642,43 +537,30 @@ class _ControlPageState extends State<ControlPage> {
     );
   }
 
-  Future<void> _sendCommand(String command) async {
+  Future<void> _turnPage(int direction) async {
+    final uri = Uri.parse(
+      'http://${widget.ip}:${widget.port}/koreader/event/GotoViewRel/$direction',
+    );
+
+    setState(() {
+      _status = 'Sending command to ${widget.ip}...';
+    });
+
     try {
-      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-
-      final data = command.codeUnits;
-      socket.send(data, InternetAddress(widget.ip), widget.port);
-
+      await http.get(uri);
       setState(() {
-        _status = 'Sent: $command';
-      });
-
-      socket.listen((event) {
-        if (event == RawSocketEvent.read) {
-          final packet = socket.receive();
-          if (packet != null) {
-            final response = String.fromCharCodes(packet.data);
-            setState(() {
-              _status = response;
-            });
-          }
-        }
-      });
-
-      Future.delayed(const Duration(seconds: 1), () {
-        socket.close();
+        _status = 'Command sent to ${widget.ip}';
       });
     } catch (e) {
-      setState(() {
-        _status = 'Error: $e';
-      });
+      // Intentionally silent: fire-and-forget
+      debugPrint('HTTP error: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),
@@ -687,7 +569,7 @@ class _ControlPageState extends State<ControlPage> {
             color: Theme.of(context).colorScheme.surface,
             border: Border(
               bottom: BorderSide(
-                color: Theme.of(context).colorScheme.onSurface, 
+                color: Theme.of(context).colorScheme.onSurface,
                 width: 1,
               ),
             ),
@@ -733,7 +615,8 @@ class _ControlPageState extends State<ControlPage> {
                   isDark ? Icons.light_mode : Icons.dark_mode,
                 ),
                 onPressed: widget.onToggleTheme,
-                tooltip: isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+                tooltip:
+                    isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
               ),
             ],
           ),
@@ -761,7 +644,7 @@ class _ControlPageState extends State<ControlPage> {
             ),
             const SizedBox(height: 20),
             Text(
-              'Connected to: ${widget.ip}',
+              'Sending commands to: ${widget.ip}',
               style: Theme.of(context).textTheme.titleMedium,
               textAlign: TextAlign.center,
             ),
@@ -770,7 +653,7 @@ class _ControlPageState extends State<ControlPage> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => _sendCommand('PREV'),
+                    onPressed: () => _turnPage(-1),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 50),
                       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -792,7 +675,7 @@ class _ControlPageState extends State<ControlPage> {
                         const Text(
                           'PREVIOUS',
                           style: TextStyle(
-                            fontSize: 18, 
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -803,7 +686,7 @@ class _ControlPageState extends State<ControlPage> {
                 const SizedBox(width: 20),
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => _sendCommand('NEXT'),
+                    onPressed: () => _turnPage(1),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 50),
                       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -825,7 +708,7 @@ class _ControlPageState extends State<ControlPage> {
                         const Text(
                           'NEXT',
                           style: TextStyle(
-                            fontSize: 18, 
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -849,8 +732,10 @@ class _ControlPageState extends State<ControlPage> {
                 _status,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 14, 
-                  color: isDark ? Colors.grey[400] : const Color.fromARGB(255, 108, 108, 108),
+                  fontSize: 14,
+                  color: isDark
+                      ? Colors.grey[400]
+                      : const Color.fromARGB(255, 108, 108, 108),
                 ),
               ),
             ),
