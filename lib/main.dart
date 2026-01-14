@@ -379,6 +379,13 @@ class _ControlPageState extends State<ControlPage> {
   VolumeButtonAction _volumeUpAction = VolumeButtonAction.next;
   VolumeButtonAction _volumeDownAction = VolumeButtonAction.prev;
 
+  int _frontLight = 0;
+  int _auxFrontLight = 0;
+  bool isFrontLightDisabled = false;
+  int _warmLight = 0;
+  int _auxWarmLight = 0;
+  bool isWarmLightDisabled = false;
+
   static const MethodChannel _channel = MethodChannel('volume_buttons');
 
   @override
@@ -536,9 +543,13 @@ class _ControlPageState extends State<ControlPage> {
     );
   }
 
-  Future<void> _turnPage(int direction) async {
+  Future<void> _sendCommand(String command, String param) async {
+    if (param.isNotEmpty) {
+      command += '/$param';
+    }
+
     final uri = Uri.parse(
-      'http://${widget.ip}:${widget.port}/koreader/event/GotoViewRel/$direction',
+      'http://${widget.ip}:${widget.port}/koreader/event/$command',
     );
 
     setState(() {
@@ -553,6 +564,44 @@ class _ControlPageState extends State<ControlPage> {
     } catch (e) {
       // Intentionally silent: fire-and-forget
       debugPrint('HTTP error: $e');
+    }
+  }
+
+  Future<void> _turnPage(int direction) async {
+    _sendCommand("GotoViewRel", direction.toString());
+  }
+
+  Future<void> _toggleFrontLight() async {
+    if (!isFrontLightDisabled) {
+      setState(() {
+        _auxFrontLight = _frontLight;
+        _frontLight = 0;
+      });
+      await _sendCommand("ToggleFrontlight", "");
+      isFrontLightDisabled = true;
+    } else {
+      setState(() {
+        _frontLight = _auxFrontLight;
+      });
+      await _sendCommand("SetFlIntensity", _frontLight.toString());
+      isFrontLightDisabled = false;
+    }
+  }
+
+  Future<void> _toggleWarmth() async {
+    if (!isWarmLightDisabled) {
+      setState(() {
+        _auxWarmLight = _warmLight;
+        _warmLight = 0;
+      });
+      await _sendCommand("SetFlWarmth", "0");
+      isWarmLightDisabled = true;
+    } else {
+      setState(() {
+        _warmLight = _auxWarmLight;
+      });
+      await _sendCommand("SetFlWarmth", _warmLight.toString());
+      isWarmLightDisabled = false;
     }
   }
 
@@ -575,7 +624,7 @@ class _ControlPageState extends State<ControlPage> {
           ),
           child: AppBar(
             title: Text(
-              'Back to Connection',
+              widget.ip,
               style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
             ),
             backgroundColor: Colors.transparent,
@@ -624,15 +673,106 @@ class _ControlPageState extends State<ControlPage> {
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Text('  Adjust Front Light and Warmth',
+                style: Theme.of(context).textTheme.titleMedium),
+            const Divider(height: 10, thickness: .2, indent: 0, endIndent: 0),
+            Row(
+              children: [
+                IconButton(
+                    onPressed: () async {
+                      await _toggleFrontLight();
+                    },
+                    icon: Icon(_frontLight > 0
+                        ? Icons.light_mode
+                        : Icons.light_mode_outlined)),
+                //Icon(Icons.light_mode),
+                Expanded(
+                  child: Slider(
+                    value: _frontLight.toDouble(),
+                    min: 0.0,
+                    max: 24.0,
+                    inactiveColor: Colors.teal.withValues(alpha: 0.3),
+                    onChanged: (double newValue) async {
+                      if (isFrontLightDisabled) {
+                        await _toggleFrontLight();
+                      }
+                      _sendCommand(
+                          "SetFlIntensity", newValue.toInt().toString());
+                      setState(() {
+                        _frontLight = newValue.toInt();
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                IconButton(
+                    onPressed: () async {
+                      await _toggleWarmth();
+                    },
+                    icon: Icon(_warmLight == 0
+                        ? Icons.wb_iridescent_outlined
+                        : Icons.wb_iridescent_rounded)),
+                //Icon(Icons.wb_iridescent_outlined),
+                Expanded(
+                  child: Slider(
+                    value: _warmLight.toDouble(),
+                    min: 0.0,
+                    max: 100.0,
+                    inactiveColor: Colors.teal.withValues(alpha: 0.3),
+                    onChanged: (double newValue) async {
+                      if (isWarmLightDisabled) {
+                        await _toggleWarmth();
+                      }
+                      _sendCommand("SetFlWarmth", newValue.toInt().toString());
+                      setState(() {
+                        _warmLight = newValue.toInt();
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 10, thickness: .2, indent: 0, endIndent: 0),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton(onPressed: (){
+                  _sendCommand("ProfileExecute", "Normal");
+                }, child: Text('Normal')),
+                IconButton(
+                  icon: Icon(
+                    Icons.settings_brightness,
+                  ),
+                  onPressed: () async {
+                    await _sendCommand("ToggleNightMode", "");
+                  },
+                  tooltip: isDark
+                      ? 'Switch to Light Mode KOReader'
+                      : 'Switch to Dark Mode KOReader',
+                ),
+                TextButton(onPressed: (){
+                  _sendCommand("ProfileExecute", "Sleep");
+                }, child: Text('Sleep')),
+              ],
+            ),
+            const Divider(height: 10, thickness: .2, indent: 0, endIndent: 0),
+            const SizedBox(height: 5),
+            Text(
+              'Page Turning',
+              style: Theme.of(context).textTheme.headlineLarge,
+              textAlign: TextAlign.center,
+            ),
             Text(
               'Use the volume buttons to turn pages!',
               style: Theme.of(context).textTheme.bodyLarge,
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 10),
             Text(
               'Vol Up: ${_volumeUpAction.displayName} | Vol Down: ${_volumeDownAction.displayName}',
               style: TextStyle(
@@ -642,12 +782,6 @@ class _ControlPageState extends State<ControlPage> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
-            Text(
-              'Sending commands to: ${widget.ip}',
-              style: Theme.of(context).textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 60),
             Row(
               children: [
                 Expanded(
@@ -717,26 +851,55 @@ class _ControlPageState extends State<ControlPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 60),
-            Container(
-              padding: const EdgeInsets.all(15),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border.all(
-                  color: isDark ? Colors.grey[700]! : Colors.grey,
+            const SizedBox(height: 0),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: () {
+                        _sendCommand("GoBackLink", "true");
+                      },
+                      icon: Icon(Icons.arrow_back),
+                    ),
+                    Icon(Icons.link),
+                  ],
                 ),
-                borderRadius: BorderRadius.zero,
-              ),
-              child: Text(
-                _status,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isDark
-                      ? Colors.grey[400]
-                      : const Color.fromARGB(255, 108, 108, 108),
+                IconButton(
+                  onPressed: () {
+                    _sendCommand("Back", "");
+                  },
+                  icon: Icon(Icons.restart_alt),
                 ),
-              ),
+                Row(
+                  children: [
+                    Icon(Icons.link),
+                    IconButton(
+                      onPressed: () {
+                        _sendCommand("GoForwardLink", "true");
+                      },
+                      icon: Icon(Icons.arrow_forward),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Row(
+              children: [
+                const Icon(Icons.info_outline),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Make sure KOReader is running and HTTP Inspector is enabled in settings.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.grey[400] : Colors.grey[600],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
