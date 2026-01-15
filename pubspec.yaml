@@ -14,7 +14,9 @@ dependencies:
   vibration: ^3.1.5
   udp: ^5.0.3
   flutter_svg: ^2.0.9
-  flutter_launcher_icons: ^0.13.1
+  flutter_launcher_icons: ^0.14.4
+  wakelock_plus: ^1.4.0
+  screen_brightness: ^2.1.7
   http: ^1.1.0
 
 
