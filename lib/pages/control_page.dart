@@ -1,16 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-//Models
-import 'package:pageturner_app/models/volume_button_action.dart';
-//Pages
-import 'package:pageturner_app/pages/text_editor_page.dart';
-import 'package:pageturner_app/pages/connection_page.dart';
-
-//THEN RESOLVE TO KOREADER SERVICE
-import 'package:http/http.dart' as http;
+import '../models/volume_button_action.dart';
+import '../services/koreader_service.dart';
+import '../services/volume_button_service.dart';
+import 'connection_page.dart';
+import 'text_editor_page.dart';
 
 class ControlPage extends StatefulWidget {
   final String ip;
@@ -29,8 +24,13 @@ class ControlPage extends StatefulWidget {
 }
 
 class _ControlPageState extends State<ControlPage> {
+  late final KOReaderService _koreaderService;
+  late final VolumeButtonService _volumeButtonService;
+
   VolumeButtonAction _volumeUpAction = VolumeButtonAction.next;
   VolumeButtonAction _volumeDownAction = VolumeButtonAction.prev;
+
+  String _status = "Connected";
 
   int _frontLight = 0;
   int _auxFrontLight = 0;
@@ -39,20 +39,158 @@ class _ControlPageState extends State<ControlPage> {
   int _auxWarmLight = 0;
   bool isWarmLightDisabled = false;
 
-  static const MethodChannel _channel = MethodChannel('volume_buttons');
+  // Profile names - support up to 5 profiles
+  final List<String> _profileNames = List.filled(5, '', growable: false);
 
   @override
   void initState() {
     super.initState();
-    _loadVolumeButtonSettings();
+    _koreaderService = KOReaderService(
+      ip: widget.ip,
+      port: widget.port,
+      onStatusUpdate: (status) {
+        if (mounted) {
+          setState(() {
+            _status = status;
+          });
+        }
+      },
+    );
 
-    _channel.setMethodCallHandler((call) async {
-      if (call.method == 'volumeUp') {
-        _turnPage(_volumeUpAction.command);
-      } else if (call.method == 'volumeDown') {
-        _turnPage(_volumeDownAction.command);
+    _volumeButtonService = VolumeButtonService(
+      onVolumeUp: () => _turnPage(_volumeUpAction.command),
+      onVolumeDown: () => _turnPage(_volumeDownAction.command),
+    );
+
+    _loadVolumeButtonSettings();
+    _loadProfileNames();
+
+    Future.delayed(const Duration(milliseconds: 300), () async {
+      if (mounted) {
+        _loadDisplayLights();
+      }
+
+      if (await _koreaderService.isConnected()) {
+        setState(() {
+          _status = "Device Connected";
+        });
+      } else {
+        setState(() {
+          _status = "No device found";
+        });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _volumeButtonService.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadProfileNames() async {
+    final prefs = await SharedPreferences.getInstance();
+    final defaultNames = ['1', '2', '3', '4', '5'];
+
+    setState(() {
+      for (int i = 0; i < 5; i++) {
+        _profileNames[i] =
+            prefs.getString('profile_${i}_name') ?? defaultNames[i];
+      }
+    });
+  }
+
+  Future<void> _saveProfileName(int index, String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('profile_${index}_name', name);
+  }
+
+  void _showEditProfileDialog(int profileIndex) {
+    final currentName = _profileNames[profileIndex];
+    final controller = TextEditingController(text: currentName);
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          title: Text(
+            'Edit Profile ${profileIndex + 1}',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Profile Name',
+              hintText: 'Enter profile name',
+              border: const OutlineInputBorder(),
+            ),
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                _updateProfileName(profileIndex, value.trim());
+                Navigator.of(context).pop();
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text(
+                'CANCEL',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                final newName = controller.text.trim();
+                if (newName.isNotEmpty) {
+                  _updateProfileName(profileIndex, newName);
+                  Navigator.of(context).pop();
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Profile renamed to "$newName"'),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                }
+              },
+              child: Text(
+                'SAVE',
+                style:
+                    TextStyle(color: Theme.of(context).colorScheme.onSurface),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _updateProfileName(int index, String name) {
+    setState(() {
+      _profileNames[index] = name;
+    });
+    _saveProfileName(index, name);
+  }
+
+  void _executeProfile(int index) {
+    _koreaderService.executeProfile(_profileNames[index]);
+  }
+
+  Future<void> _loadDisplayLights() async {
+    final frontLight = await _koreaderService.getFlIntensity();
+    final warmLight = await _koreaderService.getFlWarmth();
+
+    if (mounted) {
+      setState(() {
+        _frontLight = frontLight;
+        _warmLight = warmLight;
+      });
+    }
   }
 
   Future<void> _loadVolumeButtonSettings() async {
@@ -196,24 +334,8 @@ class _ControlPageState extends State<ControlPage> {
     );
   }
 
-  Future<void> _sendCommand(String command, String param) async {
-    if (param.isNotEmpty) {
-      command += '/$param';
-    }
-
-    final uri = Uri.parse(
-      'http://${widget.ip}:${widget.port}/koreader/event/$command',
-    );
-
-    try {
-      await http.get(uri);
-    } catch (e) {
-      debugPrint('HTTP error: $e');
-    }
-  }
-
   Future<void> _turnPage(int direction) async {
-    _sendCommand("GotoViewRel", direction.toString());
+    await _koreaderService.turnPage(direction);
   }
 
   Future<void> _toggleFrontLight() async {
@@ -222,13 +344,13 @@ class _ControlPageState extends State<ControlPage> {
         _auxFrontLight = _frontLight;
         _frontLight = 0;
       });
-      await _sendCommand("ToggleFrontlight", "");
+      await _koreaderService.toggleFrontlight();
       isFrontLightDisabled = true;
     } else {
       setState(() {
         _frontLight = _auxFrontLight;
       });
-      await _sendCommand("SetFlIntensity", _frontLight.toString());
+      await _koreaderService.setFrontLightIntensity(_frontLight);
       isFrontLightDisabled = false;
     }
   }
@@ -239,13 +361,13 @@ class _ControlPageState extends State<ControlPage> {
         _auxWarmLight = _warmLight;
         _warmLight = 0;
       });
-      await _sendCommand("SetFlWarmth", "0");
+      await _koreaderService.setWarmth(0);
       isWarmLightDisabled = true;
     } else {
       setState(() {
         _warmLight = _auxWarmLight;
       });
-      await _sendCommand("SetFlWarmth", _warmLight.toString());
+      await _koreaderService.setWarmth(_warmLight);
       isWarmLightDisabled = false;
     }
   }
@@ -330,20 +452,18 @@ class _ControlPageState extends State<ControlPage> {
         ),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(10.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('  Adjust Front Light and Warmth',
-                style: Theme.of(context).textTheme.titleMedium),
-            const Divider(height: 10, thickness: .2, indent: 0, endIndent: 0),
             Row(
               children: [
                 IconButton(
                     onPressed: () async {
                       await _toggleFrontLight();
                     },
+                    tooltip: "Toggle Front",
                     icon: Icon(_frontLight > 0
                         ? Icons.light_mode
                         : Icons.light_mode_outlined)),
@@ -357,8 +477,8 @@ class _ControlPageState extends State<ControlPage> {
                       if (isFrontLightDisabled) {
                         await _toggleFrontLight();
                       }
-                      _sendCommand(
-                          "SetFlIntensity", newValue.toInt().toString());
+                      await _koreaderService
+                          .setFrontLightIntensity(newValue.toInt());
                       setState(() {
                         _frontLight = newValue.toInt();
                       });
@@ -373,6 +493,7 @@ class _ControlPageState extends State<ControlPage> {
                     onPressed: () async {
                       await _toggleWarmth();
                     },
+                    tooltip: "Toggle Warmth",
                     icon: Icon(_warmLight == 0
                         ? Icons.wb_iridescent_outlined
                         : Icons.wb_iridescent_rounded)),
@@ -386,7 +507,7 @@ class _ControlPageState extends State<ControlPage> {
                       if (isWarmLightDisabled) {
                         await _toggleWarmth();
                       }
-                      _sendCommand("SetFlWarmth", newValue.toInt().toString());
+                      await _koreaderService.setWarmth(newValue.toInt());
                       setState(() {
                         _warmLight = newValue.toInt();
                       });
@@ -395,35 +516,59 @@ class _ControlPageState extends State<ControlPage> {
                 ),
               ],
             ),
-            const Divider(height: 10, thickness: .2, indent: 0, endIndent: 0),
+            const Divider(height: 10, thickness: .2, indent: 50, endIndent: 50),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                TextButton(
-                    onPressed: () {
-                      _sendCommand("ProfileExecute", "Normal");
-                    },
-                    child: const Text('Normal')),
                 IconButton(
-                  icon: const Icon(
-                    Icons.settings_brightness,
-                  ),
-                  onPressed: () async {
-                    await _sendCommand("ToggleNightMode", "");
-                  },
-                  tooltip: isDark
-                      ? 'Switch to Light Mode KOReader'
-                      : 'Switch to Dark Mode KOReader',
-                ),
-                TextButton(
-                    onPressed: () {
-                      _sendCommand("ProfileExecute", "Sleep");
+                    icon: const Icon(
+                      Icons.settings_brightness,
+                    ),
+                    onPressed: () async {
+                      await _koreaderService.toggleNightMode();
                     },
-                    child: const Text('Sleep')),
+                    tooltip: 'Toggle Night Mode in KoReader'),
+                IconButton(
+                    icon: const Icon(
+                      Icons.refresh,
+                    ),
+                    onPressed: () async {
+                      await _koreaderService.refreshScreen();
+                    },
+                    tooltip: 'Refresh Screen in KoReader'),
               ],
             ),
+            const Divider(height: 10, thickness: .5, indent: 0, endIndent: 0),
+            // Additional profiles row
+            Text(
+              'Custom Profiles (Long press to edit)',
+              style: Theme.of(context).textTheme.bodyLarge,
+              textAlign: TextAlign.center,
+            ),
             const Divider(height: 10, thickness: .2, indent: 0, endIndent: 0),
-            const SizedBox(height: 5),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                for (int i = 0; i < 5; i++)
+                  GestureDetector(
+                    onLongPress: () => _showEditProfileDialog(i),
+                    child: OutlinedButton(
+                      onPressed: () => _executeProfile(i),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                      ),
+                      child: Text(
+                        _profileNames[i],
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const Divider(height: 10, thickness: .5, indent: 0, endIndent: 0),
             Text(
               'Page Turning',
               style: Theme.of(context).textTheme.headlineLarge,
@@ -442,7 +587,7 @@ class _ControlPageState extends State<ControlPage> {
               ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 2),
             Row(
               children: [
                 Expanded(
@@ -520,7 +665,7 @@ class _ControlPageState extends State<ControlPage> {
                   children: [
                     IconButton(
                       onPressed: () {
-                        _sendCommand("GoBackLink", "true");
+                        _koreaderService.goBackLink();
                       },
                       icon: const Icon(Icons.arrow_back),
                     ),
@@ -529,7 +674,7 @@ class _ControlPageState extends State<ControlPage> {
                 ),
                 IconButton(
                   onPressed: () {
-                    _sendCommand("Back", "");
+                    _koreaderService.back();
                   },
                   icon: const Icon(Icons.restart_alt),
                 ),
@@ -538,7 +683,7 @@ class _ControlPageState extends State<ControlPage> {
                     const Icon(Icons.link),
                     IconButton(
                       onPressed: () {
-                        _sendCommand("GoForwardLink", "true");
+                        _koreaderService.goForwardLink();
                       },
                       icon: const Icon(Icons.arrow_forward),
                     ),
@@ -553,7 +698,7 @@ class _ControlPageState extends State<ControlPage> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Make sure KOReader is running and HTTP Inspector is enabled in settings.',
+                    _status,
                     style: TextStyle(
                       fontSize: 12,
                       color: isDark ? Colors.grey[400] : Colors.grey[600],

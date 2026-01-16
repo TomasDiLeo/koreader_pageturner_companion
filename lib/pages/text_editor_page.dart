@@ -1,8 +1,6 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:http/http.dart' as http;
+import '../services/koreader_service.dart';
 
 class TextEditorPage extends StatefulWidget {
   final String ip;
@@ -21,55 +19,46 @@ class TextEditorPage extends StatefulWidget {
 }
 
 class _TextEditorPageState extends State<TextEditorPage> {
+  late final KOReaderService _koreaderService;
   final TextEditingController _textController = TextEditingController();
   bool _isLoading = false;
   String _status = 'Ready';
 
   @override
   void initState() {
-    _getText();
     super.initState();
+    _koreaderService = KOReaderService(
+      ip: widget.ip,
+      port: widget.port,
+      onStatusUpdate: (status) {
+        if (mounted) {
+          setState(() {
+            _status = status;
+          });
+        }
+      },
+    );
+    _getText();
   }
 
   Future<void> _getText() async {
     setState(() {
       _isLoading = true;
-      _status = 'Fetching text from KOReader...';
     });
 
     try {
-      final uri = Uri.parse(
-        'http://${widget.ip}:${widget.port}/koreader/UIManager/_window_stack/2/widget/_input_widget/getText?/',
-      );
-
-      final response = await http.get(uri);
-
-      if (response.statusCode == 200) {
-        RegExp exp = RegExp(r'\["([^"]*)"\]');
-        final decodedText = utf8.decode(response.bodyBytes);
-
-        final match = exp.firstMatch(decodedText);
-
+      final text = await _koreaderService.getText();
+      
+      if (mounted) {
         setState(() {
-          _textController.text = match != null ? match.group(1).toString() : "NO";
-          _status = 'Text loaded successfully';
-        });
-      } else {
-        setState(() {
-          _status = 'Error: ${response.statusCode}';
-          _textController.text = "";
+          _textController.text = text ?? '';
+          _isLoading = false;
         });
       }
     } catch (e) {
-      if(mounted){
+      if (mounted) {
         setState(() {
-          _status = 'Error: $e';
-          _textController.text = "";
-        });
-      }
-    } finally {
-      if(mounted){  
-        setState(() {
+          _textController.text = '';
           _isLoading = false;
         });
       }
@@ -77,92 +66,43 @@ class _TextEditorPageState extends State<TextEditorPage> {
   }
 
   Future<void> _sendText() async {
-    final text = _textController.text;
-
     setState(() {
       _isLoading = true;
-      _status = 'Sending text to KOReader...';
     });
 
     try {
-      // First, delete all existing text
-      await http.get(
-        Uri.parse(
-          'http://${widget.ip}:${widget.port}/koreader/UIManager/_window_stack/2/widget/_input_widget/delAll?/',
-        ),
-      );
-
-      // // Then add the new text
-      // final encodedText = Uri.encodeComponent(text);
-      // //encodedText.replaceAll(r'"', "%22");
-      // final uri = Uri.parse(
-      //   'http://${widget.ip}:${widget.port}/koreader/UIManager/_window_stack/2/widget/_input_widget/addChars/ "${encodedText}"',
-      // );
-
-      final parts = text.split('/');
-      print(parts);
-      for (int i = 0; i < parts.length; i++) {
-        if (parts[i].isNotEmpty) {
-          await _sendChunk(parts[i]);
-        }
-        if (i < parts.length - 1) {
-          await _sendChunk('/');
-        }
-      }
-
-      setState(() {
-        _status = 'Text sent successfully';
-      });
+      await _koreaderService.sendText(_textController.text);
     } catch (e) {
-      setState(() {
-        _status = 'Error: $e';
-      });
+      // Error handled by service
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
-  }
-
-  Future<void> _sendChunk(String chunk) async {
-    if(chunk == "/"){
-      chunk = '"$chunk"';
-    }
-    final encoded = Uri.encodeComponent(chunk);
-
-    final uri = Uri.parse(
-      'http://${widget.ip}:${widget.port}'
-      '/koreader/UIManager/_window_stack/2/widget/_input_widget/addChars/$encoded',
-    );
-
-    await http.get(uri);
   }
 
   Future<void> _clearText() async {
     setState(() {
       _isLoading = true;
-      _status = 'Clearing text on KOReader...';
     });
 
     try {
-      final uri = Uri.parse(
-        'http://${widget.ip}:${widget.port}/koreader/UIManager/_window_stack/2/widget/_input_widget/delAll?/',
-      );
-
-      await http.get(uri);
-
-      setState(() {
-        _textController.clear();
-        _status = 'Text cleared';
-      });
+      await _koreaderService.deleteAllText();
+      
+      if (mounted) {
+        setState(() {
+          _textController.clear();
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _status = 'Error: $e';
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -274,20 +214,40 @@ class _TextEditorPageState extends State<TextEditorPage> {
                       showDialog(
                         context: context,
                         builder: (context) => AlertDialog(
-                          title: Text('Clear Text?'),
-                          content:
-                              Text('This will clear all text in KOReader.'),
+                          backgroundColor: Theme.of(context).colorScheme.surface,
+                          title: Text(
+                            'Clear Text?',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                          content: Text(
+                            'This will clear all text in KOReader.',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.pop(context),
-                              child: Text('CANCEL'),
+                              child: Text(
+                                'CANCEL',
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                              ),
                             ),
                             TextButton(
                               onPressed: () {
                                 Navigator.pop(context);
                                 _clearText();
                               },
-                              child: Text('CLEAR'),
+                              child: Text(
+                                'CLEAR',
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.onSurface,
+                                ),
+                              ),
                             ),
                           ],
                         ),
