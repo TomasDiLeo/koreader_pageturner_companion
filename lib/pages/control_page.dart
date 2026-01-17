@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:pageturner_app/pages/reading_mode_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/volume_button_action.dart';
 import '../services/koreader_service.dart';
@@ -429,6 +430,26 @@ class _ControlPageState extends State<ControlPage> {
               },
             ),
             actions: [
+              IconButton(
+                icon: const Icon(Icons.auto_stories),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    PageRouteBuilder(
+                      pageBuilder: (context, animation, secondaryAnimation) => ReadingModePage(
+                        ip: widget.ip,
+                        port: widget.port,
+                      ),
+                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                        return FadeTransition(opacity: animation, child: child);
+                      },
+                      transitionDuration: const Duration(milliseconds: 300),
+                      reverseTransitionDuration: const Duration(milliseconds: 300),
+                    ),
+                  );
+                },
+                tooltip: 'Reading Mode',
+              ),
               IconButton(
                 icon: const Icon(Icons.keyboard),
                 onPressed: _openTextEditor,
