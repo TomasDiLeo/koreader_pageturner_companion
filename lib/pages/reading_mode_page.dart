@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:pageturner_app/services/koreader_service.dart';
 import 'package:pageturner_app/utils/screen_utils.dart';
 
 class ReadingModePage extends StatefulWidget {
@@ -20,10 +21,18 @@ class ReadingModePage extends StatefulWidget {
 class _ReadingModePageState extends State<ReadingModePage> {
   bool _showIndicators = true;
   Timer? _indicatorTimer;
+  late final KOReaderService _koreaderService;
 
   @override
   void initState() {
     super.initState();
+
+    _koreaderService = KOReaderService(
+      ip: widget.ip,
+      port: widget.port,
+      onStatusUpdate: (status) {},
+    );
+
     _enterReadingMode();
   }
 
@@ -61,17 +70,6 @@ class _ReadingModePageState extends State<ReadingModePage> {
     super.dispose();
   }
 
-  Future<void> _sendCommand(String command) async {
-    try {
-      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      final data = command.codeUnits;
-      socket.send(data, InternetAddress(widget.ip), widget.port);
-      socket.close();
-    } catch (e) {
-      debugPrint('Error sending command: $e');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -103,7 +101,7 @@ class _ReadingModePageState extends State<ReadingModePage> {
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _sendCommand('NEXT'),
+                  onTap: () => _koreaderService.turnPage(1),
                   onDoubleTap: _exitReadingMode, // Pass through double tap
                   splashColor: Colors.white.withOpacity(0.1),
                   highlightColor: Colors.white.withOpacity(0.05),
@@ -121,7 +119,7 @@ class _ReadingModePageState extends State<ReadingModePage> {
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _sendCommand('PREV'),
+                  onTap: () => _koreaderService.turnPage(-1),
                   onDoubleTap: _exitReadingMode, // Pass through double tap
                   splashColor: Colors.white.withOpacity(0.1),
                   highlightColor: Colors.white.withOpacity(0.05),
